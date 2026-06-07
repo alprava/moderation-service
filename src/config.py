@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Межсервисный ключ
     service_key: str = os.getenv("MOD_SERVICE_KEY", "moderation-secret-key")
     
+    # Таймаут для IN_REVIEW (минуты)
+    review_timeout_minutes: int = 30
+    
     model_config = {"env_file": ".env"}
 
 

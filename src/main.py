@@ -50,3 +50,7 @@ def health_check():
 # Подключение роутеров
 from src.routes import events
 app.include_router(events.router)
+
+# Подключение роутеров
+from src.routes import queue
+app.include_router(queue.router)

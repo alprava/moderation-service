@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Enum, JSON, Text
+from sqlalchemy import Column, String, DateTime, Enum, JSON, Text, Integer
 from src.database import Base
 
 
@@ -36,3 +36,7 @@ class Ticket(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(32), nullable=True)
+    
+    # Поля для очереди
+    queue_priority = Column(Integer, default=4)  # 1 — высший, 4 — низший
+    in_review_expires_at = Column(DateTime, nullable=True)
