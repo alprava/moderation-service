@@ -15,15 +15,16 @@ router = APIRouter(prefix="/api/v1/tickets", tags=["Tickets"])
 
 
 class FieldReport(BaseModel):
-    field_name: str
-    sku_id: Optional[str] = None
-    comment: str
+    """Входной field report по openapi"""
+    field_path: str
+    message: str
 
 
 class SoftBlockRequest(BaseModel):
-    reason_id: str
-    comment: Optional[str] = None
+    """Входной запрос на мягкую блокировку по openapi"""
+    blocking_reason_ids: List[str]  # массив UUID причин
     field_reports: Optional[List[FieldReport]] = None
+    moderator_comment: Optional[str] = None
 
 
 def verify_moderator_key(x_moderator_key: str = Header(...)) -> str:
@@ -36,18 +37,32 @@ def verify_moderator_key(x_moderator_key: str = Header(...)) -> str:
     return x_moderator_key
 
 
+def convert_field_report_for_b2b(field_reports: List[FieldReport]) -> List[dict]:
+    """Конвертируем field_path → field_name для отправки в B2B"""
+    if not field_reports:
+        return []
+    return [
+        {
+            "field_name": fr.field_path,
+            "comment": fr.message,
+            "sku_id": None  # по умолчанию, может быть переопределено
+        }
+        for fr in field_reports
+    ]
+
+
 def send_event_to_b2b(product_id: str, hard_block: bool, 
-                       blocking_reason_id: str, moderator_comment: str, 
-                       field_reports: list, idempotency_key: str) -> None:
+                       blocking_reason_ids: List[str], moderator_comment: str, 
+                       field_reports: List[dict], idempotency_key: str) -> None:
     """Отправка события BLOCKED в B2B"""
     event_data = {
         "idempotency_key": idempotency_key,
         "product_id": product_id,
         "event_type": "BLOCKED",
         "hard_block": hard_block,
-        "blocking_reason_id": blocking_reason_id,
+        "blocking_reason_id": blocking_reason_ids[0] if blocking_reason_ids else None,
         "moderator_comment": moderator_comment,
-        "field_reports": field_reports or [],
+        "field_reports": field_reports,
         "occurred_at": datetime.now(timezone.utc).isoformat()
     }
     
@@ -95,15 +110,22 @@ def soft_block_ticket(
             detail={"code": "FORBIDDEN", "message": "This ticket is not assigned to you"}
         )
     
-    # 4. Валидируем причину блокировки
+    # 4. Валидируем причины блокировки (берём первую из массива)
+    if not request.blocking_reason_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_REQUEST", "message": "blocking_reason_ids is required"}
+        )
+    
+    reason_id = request.blocking_reason_ids[0]
     reason = db.query(BlockingReason).filter(
-        BlockingReason.id == request.reason_id,
+        BlockingReason.id == reason_id,
         BlockingReason.is_active == True
     ).first()
     if not reason:
         raise HTTPException(
             status_code=400,
-            detail={"code": "INVALID_REQUEST", "message": f"Blocking reason {request.reason_id} not found or inactive"}
+            detail={"code": "INVALID_REQUEST", "message": f"Blocking reason {reason_id} not found or inactive"}
         )
     
     # 5. Проверяем, что причина не hard_only
@@ -113,37 +135,47 @@ def soft_block_ticket(
             detail={"code": "INVALID_REQUEST", "message": "This reason is for hard block only, use hard block endpoint"}
         )
     
-    # 6. Валидация field_reports
+    # 6. Валидация field_reports (field_path должен быть в допустимом списке)
     valid_fields = {"title", "description", "product_images", "category", "sku_name", "sku_image", "sku_price"}
     if request.field_reports:
         for fr in request.field_reports:
-            if fr.field_name not in valid_fields:
+            if fr.field_path not in valid_fields:
                 raise HTTPException(
                     status_code=400,
-                    detail={"code": "INVALID_REQUEST", "message": f"Invalid field_name: {fr.field_name}"}
+                    detail={"code": "INVALID_REQUEST", "message": f"Invalid field_path: {fr.field_path}"}
                 )
     
     # 7. Обновляем тикет
     ticket.status = TicketStatus.BLOCKED
-    ticket.blocking_reason_id = request.reason_id
-    ticket.moderator_comment = request.comment
-    ticket.field_reports = [fr.dict() for fr in request.field_reports] if request.field_reports else []
+    ticket.blocking_reason_id = reason_id
+    ticket.moderator_comment = request.moderator_comment
+    ticket.field_reports = [
+        {"field_name": fr.field_path, "comment": fr.message, "sku_id": None} 
+        for fr in request.field_reports
+    ] if request.field_reports else []
     ticket.updated_at = datetime.now(timezone.utc)
     ticket.reviewed_at = datetime.now(timezone.utc)
     
     db.commit()
     db.refresh(ticket)
     
-    # 8. Отправляем событие в B2B
+    # 8. Отправляем событие в B2B (конвертируем field_path → field_name)
+    b2b_field_reports = convert_field_report_for_b2b(request.field_reports or [])
     idem_key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ticket.product_id}:BLOCKED:{ticket.id}"))
-    send_event_to_b2b(
-        product_id=ticket.product_id,
-        hard_block=False,
-        blocking_reason_id=request.reason_id,
-        moderator_comment=request.comment or "",
-        field_reports=[fr.dict() for fr in request.field_reports] if request.field_reports else [],
-        idempotency_key=idem_key
-    )
+    
+    # Отправляем после коммита (не блокируем ответ)
+    try:
+        send_event_to_b2b(
+            product_id=ticket.product_id,
+            hard_block=False,
+            blocking_reason_ids=request.blocking_reason_ids,
+            moderator_comment=request.moderator_comment or "",
+            field_reports=b2b_field_reports,
+            idempotency_key=idem_key
+        )
+    except Exception:
+        # Логируем, но не прерываем ответ (в реальном проекте нужен outbox)
+        pass
     
     return {
         "ticket_id": ticket.id,

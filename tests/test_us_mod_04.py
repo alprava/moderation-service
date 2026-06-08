@@ -41,9 +41,9 @@ def test_soft_block_transitions_to_blocked_with_field_reports():
     resp = client.post(
         f"/api/v1/tickets/{ticket_id}/block",
         json={
-            "reason_id": "1",
-            "comment": "Плохое описание",
-            "field_reports": [{"field_name": "description", "comment": "Некорректное описание"}]
+            "blocking_reason_ids": ["1"],
+            "moderator_comment": "Плохое описание",
+            "field_reports": [{"field_path": "description", "message": "Некорректное описание"}]
         },
         headers={"X-Moderator-Key": "moderator1"}
     )
@@ -73,7 +73,7 @@ def test_soft_block_unknown_reason_returns_400():
     
     resp = client.post(
         f"/api/v1/tickets/{ticket_id}/block",
-        json={"reason_id": "non-existent-id"},
+        json={"blocking_reason_ids": ["non-existent-id"]},
         headers={"X-Moderator-Key": "moderator1"}
     )
     assert resp.status_code == 400
@@ -97,14 +97,14 @@ def test_soft_block_others_card_returns_403():
     
     resp = client.post(
         f"/api/v1/tickets/{ticket_id}/block",
-        json={"reason_id": "1"},
+        json={"blocking_reason_ids": ["1"]},
         headers={"X-Moderator-Key": "wrong_moderator"}
     )
     assert resp.status_code == 403
 
 
-def test_soft_block_invalid_field_name_returns_400():
-    """Некорректное поле field_name → 400"""
+def test_soft_block_invalid_field_path_returns_400():
+    """Некорректное поле field_path → 400"""
     db = SessionLocal()
     ticket = Ticket(
         id=uuid.uuid4().hex,
@@ -122,8 +122,8 @@ def test_soft_block_invalid_field_name_returns_400():
     resp = client.post(
         f"/api/v1/tickets/{ticket_id}/block",
         json={
-            "reason_id": "1",
-            "field_reports": [{"field_name": "invalid_field", "comment": "test"}]
+            "blocking_reason_ids": ["1"],
+            "field_reports": [{"field_path": "invalid_field", "message": "test"}]
         },
         headers={"X-Moderator-Key": "moderator1"}
     )
@@ -148,7 +148,7 @@ def test_soft_block_hard_only_reason_returns_400():
     
     resp = client.post(
         f"/api/v1/tickets/{ticket_id}/block",
-        json={"reason_id": "999"},
+        json={"blocking_reason_ids": ["999"]},
         headers={"X-Moderator-Key": "moderator1"}
     )
     assert resp.status_code == 400
