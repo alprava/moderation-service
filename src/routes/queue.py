@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import select, update
 
 from src.database import get_db
 from src.models.ticket import Ticket, TicketStatus
@@ -10,7 +11,7 @@ router = APIRouter(prefix="/api/v1/queue", tags=["Queue"])
 
 
 def verify_moderator_key(x_moderator_key: str = Header(...)) -> str:
-    """Проверка ключа модератора (упрощённо)"""
+    """Проверка ключа модератора"""
     if not x_moderator_key:
         raise HTTPException(
             status_code=401,
@@ -19,12 +20,15 @@ def verify_moderator_key(x_moderator_key: str = Header(...)) -> str:
     return x_moderator_key
 
 
-@router.get("/next", status_code=200)
-def get_next_card(
+@router.post("/claim", status_code=200)
+def claim_next_card(
     moderator_id: str = Depends(verify_moderator_key),
     db: Session = Depends(get_db),
 ):
-    """Получить следующую карточку из очереди (US-MOD-02)"""
+    """
+    Получить следующую карточку из очереди (US-MOD-02).
+    POST /api/v1/queue/claim
+    """
     
     # 1. Проверяем, нет ли у модератора уже карточки в IN_REVIEW
     existing = db.query(Ticket).filter(
@@ -37,16 +41,15 @@ def get_next_card(
             detail={"code": "CONFLICT", "message": "Moderator already has a card in review"}
         )
     
-    # 2. Ищем самую старую PENDING карточку
+    # 2. Ищем самую старую PENDING карточку с блокировкой FOR UPDATE SKIP LOCKED
+    # Для SQLite в тестах SKIP LOCKED не поддерживается, но для PostgreSQL работает
     ticket = db.query(Ticket).filter(
         Ticket.status == TicketStatus.PENDING
-    ).order_by(Ticket.created_at.asc()).first()
+    ).order_by(Ticket.created_at.asc()).with_for_update(skip_locked=True).first()
     
     if not ticket:
-        raise HTTPException(
-            status_code=204,
-            detail={"code": "NO_CONTENT", "message": "Queue is empty"}
-        )
+        # Пустая очередь — возвращаем 204 без тела
+        return Response(status_code=204)
     
     # 3. Блокируем карточку
     ticket.status = TicketStatus.IN_REVIEW

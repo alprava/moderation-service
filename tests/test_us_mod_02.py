@@ -22,6 +22,7 @@ def test_next_returns_oldest_pending():
     newer_id = str(uuid.uuid4())
     
     ticket1 = Ticket(
+        id=uuid.uuid4().hex,
         product_id=older_id,
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.PENDING,
@@ -29,6 +30,7 @@ def test_next_returns_oldest_pending():
         product_data_after={}
     )
     ticket2 = Ticket(
+        id=uuid.uuid4().hex,
         product_id=newer_id,
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.PENDING,
@@ -40,8 +42,8 @@ def test_next_returns_oldest_pending():
     db.close()
     
     moderator_id = str(uuid.uuid4())
-    resp = client.get(
-        "/api/v1/queue/next",
+    resp = client.post(
+        "/api/v1/queue/claim",
         headers={"X-Moderator-Key": moderator_id}
     )
     assert resp.status_code == 200
@@ -63,6 +65,7 @@ def test_concurrent_two_moderators_get_different_cards():
     product_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     for pid in product_ids:
         ticket = Ticket(
+            id=uuid.uuid4().hex,
             product_id=pid,
             seller_id=str(uuid.uuid4()),
             status=TicketStatus.PENDING,
@@ -76,8 +79,8 @@ def test_concurrent_two_moderators_get_different_cards():
     moderator1 = str(uuid.uuid4())
     moderator2 = str(uuid.uuid4())
     
-    resp1 = client.get("/api/v1/queue/next", headers={"X-Moderator-Key": moderator1})
-    resp2 = client.get("/api/v1/queue/next", headers={"X-Moderator-Key": moderator2})
+    resp1 = client.post("/api/v1/queue/claim", headers={"X-Moderator-Key": moderator1})
+    resp2 = client.post("/api/v1/queue/claim", headers={"X-Moderator-Key": moderator2})
     
     assert resp1.status_code == 200
     assert resp2.status_code == 200
@@ -96,11 +99,13 @@ def test_empty_queue_returns_204():
     db.close()
     
     moderator_id = str(uuid.uuid4())
-    resp = client.get(
-        "/api/v1/queue/next",
+    resp = client.post(
+        "/api/v1/queue/claim",
         headers={"X-Moderator-Key": moderator_id}
     )
     assert resp.status_code == 204
+    # Проверяем, что тело ответа пустое
+    assert resp.text == ""
 
 
 def test_moderator_already_has_in_review_returns_409():
@@ -111,6 +116,7 @@ def test_moderator_already_has_in_review_returns_409():
     moderator_id = str(uuid.uuid4())
     
     ticket = Ticket(
+        id=uuid.uuid4().hex,
         product_id=str(uuid.uuid4()),
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
@@ -121,8 +127,8 @@ def test_moderator_already_has_in_review_returns_409():
     db.commit()
     db.close()
     
-    resp = client.get(
-        "/api/v1/queue/next",
+    resp = client.post(
+        "/api/v1/queue/claim",
         headers={"X-Moderator-Key": moderator_id}
     )
     assert resp.status_code == 409
