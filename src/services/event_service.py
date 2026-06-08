@@ -17,60 +17,55 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
         ProcessedEvent.idempotency_key == str(event.idempotency_key)
     ).first()
     if existing:
-        return  # уже обработано
+        return
     
-    # 2. Найти или создать тикет
-    ticket = db.query(Ticket).filter(Ticket.product_id == str(event.product_id)).first()
+    product_id = str(event.payload.product_id)
+    seller_id = str(event.payload.seller_id)
     
-    if event.event == B2BEventType.CREATED:
+    if event.event_type == B2BEventType.PRODUCT_CREATED:
+        # Создаём новый тикет (если уже существует — можно обновить)
+        ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if ticket:
-            # Тикет уже существует — обновляем данные
-            ticket.product_data_after = event.payload
+            # Обновляем существующий
+            ticket.product_data_after = event.payload.json_after
             ticket.status = TicketStatus.PENDING
             ticket.updated_at = datetime.now(timezone.utc)
         else:
-            # Создаём новый тикет
             ticket = Ticket(
-                product_id=str(event.product_id),
-                seller_id=str(event.seller_id),
+                product_id=product_id,
+                seller_id=seller_id,
                 status=TicketStatus.PENDING,
-                product_data_after=event.payload,
+                product_data_after=event.payload.json_after,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(ticket)
     
-    elif event.event == B2BEventType.EDITED:
+    elif event.event_type == B2BEventType.PRODUCT_EDITED:
+        ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if not ticket:
-            # Тикет не найден — может быть, надо создать? По канону — создаём
-            ticket = Ticket(
-                product_id=str(event.product_id),
-                seller_id=str(event.seller_id),
-                status=TicketStatus.PENDING,
-                product_data_after=event.payload,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "INVALID_REQUEST", "message": f"Ticket for product {product_id} not found"}
             )
-            db.add(ticket)
-        else:
-            # Если тикет был MODERATED/BLOCKED — возвращаем в IN_REVIEW
-            if ticket.status in (TicketStatus.APPROVED, TicketStatus.BLOCKED):
-                ticket.status = TicketStatus.IN_REVIEW
-            # Обновляем данные
-            ticket.product_data_before = ticket.product_data_after
-            ticket.product_data_after = event.payload
-            ticket.updated_at = datetime.now(timezone.utc)
+        # Если тикет был APPROVED или BLOCKED — возвращаем в PENDING (очередь)
+        if ticket.status in (TicketStatus.APPROVED, TicketStatus.BLOCKED):
+            ticket.status = TicketStatus.PENDING
+        # Обновляем данные
+        ticket.product_data_before = ticket.product_data_after
+        ticket.product_data_after = event.payload.json_after
+        ticket.updated_at = datetime.now(timezone.utc)
     
-    elif event.event == B2BEventType.DELETED:
+    elif event.event_type == B2BEventType.PRODUCT_DELETED:
+        ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if ticket:
-            # Удаляем тикет или помечаем как удалённый
             db.delete(ticket)
     
     # 3. Записать идемпотентность
     db.add(ProcessedEvent(
         sender_service="b2b",
         idempotency_key=str(event.idempotency_key),
-        product_id=str(event.product_id),
-        event_type=event.event.value,
+        product_id=product_id,
+        event_type=event.event_type.value,
     ))
     db.commit()
