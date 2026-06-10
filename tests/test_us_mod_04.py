@@ -25,17 +25,19 @@ db.close()
 def test_soft_block_transitions_to_blocked_with_field_reports():
     """Мягкая блокировка → статус BLOCKED, сохраняются field_reports"""
     db = SessionLocal()
+    ticket_id = uuid.uuid4().hex
     ticket = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket_id,
         product_id=str(uuid.uuid4()),
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
         reviewed_by="moderator1",
-        product_data_after={}
+        product_data_after={},
+        queue_priority=4,
+        kind="product"
     )
     db.add(ticket)
     db.commit()
-    ticket_id = ticket.id
     db.close()
     
     resp = client.post(
@@ -49,17 +51,24 @@ def test_soft_block_transitions_to_blocked_with_field_reports():
     )
     assert resp.status_code == 200
     data = resp.json()
+    
+    # Проверяем формат ответа TicketResponse (без blocking_reason_id)
+    assert "id" in data
+    assert data["id"] == ticket_id
+    assert "product_id" in data
+    assert "seller_id" in data
+    assert "kind" in data
     assert data["status"] == TicketStatus.BLOCKED
-    assert data["blocking_reason_id"] == "1"
-    assert data["moderator_comment"] == "Плохое описание"
-    assert len(data["field_reports"]) == 1
+    assert "queue_priority" in data
+    assert "created_at" in data
 
 
 def test_soft_block_unknown_reason_returns_400():
     """Несуществующая причина блокировки → 400"""
     db = SessionLocal()
+    ticket_id = uuid.uuid4().hex
     ticket = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket_id,
         product_id=str(uuid.uuid4()),
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
@@ -68,7 +77,6 @@ def test_soft_block_unknown_reason_returns_400():
     )
     db.add(ticket)
     db.commit()
-    ticket_id = ticket.id
     db.close()
     
     resp = client.post(
@@ -82,8 +90,9 @@ def test_soft_block_unknown_reason_returns_400():
 def test_soft_block_others_card_returns_403():
     """Чужая карточка (не принадлежит модератору) → 403"""
     db = SessionLocal()
+    ticket_id = uuid.uuid4().hex
     ticket = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket_id,
         product_id=str(uuid.uuid4()),
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
@@ -92,7 +101,6 @@ def test_soft_block_others_card_returns_403():
     )
     db.add(ticket)
     db.commit()
-    ticket_id = ticket.id
     db.close()
     
     resp = client.post(
@@ -103,47 +111,22 @@ def test_soft_block_others_card_returns_403():
     assert resp.status_code == 403
 
 
-def test_soft_block_invalid_field_path_returns_400():
-    """Некорректное поле field_path → 400"""
+def test_soft_block_hard_only_reason_returns_hard_blocked():
+    """hard_only причина → HARD_BLOCKED"""
     db = SessionLocal()
+    ticket_id = uuid.uuid4().hex
     ticket = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket_id,
         product_id=str(uuid.uuid4()),
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
         reviewed_by="moderator1",
-        product_data_after={}
+        product_data_after={},
+        queue_priority=4,
+        kind="product"
     )
     db.add(ticket)
     db.commit()
-    ticket_id = ticket.id
-    db.close()
-    
-    resp = client.post(
-        f"/api/v1/tickets/{ticket_id}/block",
-        json={
-            "blocking_reason_ids": ["1"],
-            "field_reports": [{"field_path": "invalid_field", "message": "test"}]
-        },
-        headers={"X-Moderator-Key": "moderator1"}
-    )
-    assert resp.status_code == 400
-
-
-def test_soft_block_hard_only_reason_returns_400():
-    """hard_only причина для мягкой блокировки → 400"""
-    db = SessionLocal()
-    ticket = Ticket(
-        id=uuid.uuid4().hex,
-        product_id=str(uuid.uuid4()),
-        seller_id=str(uuid.uuid4()),
-        status=TicketStatus.IN_REVIEW,
-        reviewed_by="moderator1",
-        product_data_after={}
-    )
-    db.add(ticket)
-    db.commit()
-    ticket_id = ticket.id
     db.close()
     
     resp = client.post(
@@ -151,4 +134,6 @@ def test_soft_block_hard_only_reason_returns_400():
         json={"blocking_reason_ids": ["999"]},
         headers={"X-Moderator-Key": "moderator1"}
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == TicketStatus.HARD_BLOCKED

@@ -22,7 +22,7 @@ class FieldReport(BaseModel):
 
 class SoftBlockRequest(BaseModel):
     """Входной запрос на мягкую блокировку по openapi"""
-    blocking_reason_ids: List[str]  # массив UUID причин
+    blocking_reason_ids: List[str]
     field_reports: Optional[List[FieldReport]] = None
     moderator_comment: Optional[str] = None
 
@@ -45,7 +45,7 @@ def convert_field_report_for_b2b(field_reports: List[FieldReport]) -> List[dict]
         {
             "field_name": fr.field_path,
             "comment": fr.message,
-            "sku_id": None  # по умолчанию, может быть переопределено
+            "sku_id": None
         }
         for fr in field_reports
     ]
@@ -110,7 +110,7 @@ def soft_block_ticket(
             detail={"code": "FORBIDDEN", "message": "This ticket is not assigned to you"}
         )
     
-    # 4. Валидируем причины блокировки (берём первую из массива)
+    # 4. Валидируем причины блокировки (берём первую)
     if not request.blocking_reason_ids:
         raise HTTPException(
             status_code=400,
@@ -128,25 +128,18 @@ def soft_block_ticket(
             detail={"code": "INVALID_REQUEST", "message": f"Blocking reason {reason_id} not found or inactive"}
         )
     
-    # 5. Проверяем, что причина не hard_only
-    if reason.hard_only:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "INVALID_REQUEST", "message": "This reason is for hard block only, use hard block endpoint"}
-        )
+    # 5. Определяем hard_block по причине
+    hard_block = reason.hard_only
     
-    # 6. Валидация field_reports (field_path должен быть в допустимом списке)
-    valid_fields = {"title", "description", "product_images", "category", "sku_name", "sku_image", "sku_price"}
-    if request.field_reports:
-        for fr in request.field_reports:
-            if fr.field_path not in valid_fields:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"code": "INVALID_REQUEST", "message": f"Invalid field_path: {fr.field_path}"}
-                )
+    # 6. Валидация field_path — не проверяем (свободная строка по контракту)
+    #    Убираем проверку против valid_fields
     
     # 7. Обновляем тикет
-    ticket.status = TicketStatus.BLOCKED
+    if hard_block:
+        ticket.status = TicketStatus.HARD_BLOCKED
+    else:
+        ticket.status = TicketStatus.BLOCKED
+    
     ticket.blocking_reason_id = reason_id
     ticket.moderator_comment = request.moderator_comment
     ticket.field_reports = [
@@ -159,30 +152,29 @@ def soft_block_ticket(
     db.commit()
     db.refresh(ticket)
     
-    # 8. Отправляем событие в B2B (конвертируем field_path → field_name)
+    # 8. Отправляем событие в B2B
     b2b_field_reports = convert_field_report_for_b2b(request.field_reports or [])
     idem_key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ticket.product_id}:BLOCKED:{ticket.id}"))
     
-    # Отправляем после коммита (не блокируем ответ)
     try:
         send_event_to_b2b(
             product_id=ticket.product_id,
-            hard_block=False,
+            hard_block=hard_block,
             blocking_reason_ids=request.blocking_reason_ids,
             moderator_comment=request.moderator_comment or "",
             field_reports=b2b_field_reports,
             idempotency_key=idem_key
         )
     except Exception:
-        # Логируем, но не прерываем ответ (в реальном проекте нужен outbox)
         pass
     
+    # 9. Возвращаем TicketResponse (по контракту)
     return {
-        "ticket_id": ticket.id,
+        "id": ticket.id,
+        "product_id": ticket.product_id,
+        "seller_id": ticket.seller_id,
+        "kind": getattr(ticket, 'kind', 'product'),
         "status": ticket.status,
-        "blocking_reason_id": ticket.blocking_reason_id,
-        "moderator_comment": ticket.moderator_comment,
-        "field_reports": ticket.field_reports,
-        "reviewed_by": ticket.reviewed_by,
-        "reviewed_at": ticket.reviewed_at.isoformat() if ticket.reviewed_at else None,
+        "queue_priority": ticket.queue_priority,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
     }
