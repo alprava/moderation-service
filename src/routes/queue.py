@@ -41,11 +41,14 @@ def claim_next_card(
             detail={"code": "CONFLICT", "message": "Moderator already has a card in review"}
         )
     
-    # 2. Ищем самую старую PENDING карточку с блокировкой FOR UPDATE SKIP LOCKED
-    # Для SQLite в тестах SKIP LOCKED не поддерживается, но для PostgreSQL работает
+    # 2. Ищем самую старую PENDING карточку с учётом приоритета
+    #    Сначала по queue_priority (1 — высший), потом по created_at
     ticket = db.query(Ticket).filter(
         Ticket.status == TicketStatus.PENDING
-    ).order_by(Ticket.created_at.asc()).with_for_update(skip_locked=True).first()
+    ).order_by(
+        Ticket.queue_priority.asc(),   # 1,2,3,4
+        Ticket.created_at.asc()        # FIFO внутри приоритета
+    ).with_for_update(skip_locked=True).first()
     
     if not ticket:
         # Пустая очередь — возвращаем 204 без тела
@@ -60,13 +63,13 @@ def claim_next_card(
     db.commit()
     db.refresh(ticket)
     
-    # 4. Возвращаем карточку
+    # 4. Возвращаем карточку в формате TicketResponse (по контракту)
     return {
-        "ticket_id": ticket.id,
+        "id": ticket.id,                      # id вместо ticket_id
         "product_id": ticket.product_id,
         "seller_id": ticket.seller_id,
+        "kind": getattr(ticket, 'kind', 'product'),  # kind (по умолчанию 'product')
         "status": ticket.status,
-        "product_data": ticket.product_data_after,
+        "queue_priority": ticket.queue_priority,
         "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
-        "in_review_expires_at": ticket.in_review_expires_at.isoformat() if ticket.in_review_expires_at else None,
     }

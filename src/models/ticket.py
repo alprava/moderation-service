@@ -40,3 +40,5 @@ class Ticket(Base):
     # Поля для очереди
     queue_priority = Column(Integer, default=4)  # 1 — высший, 4 — низший
     in_review_expires_at = Column(DateTime, nullable=True)
+
+    kind = Column(String(50), default="product")  # тип тикета (product, sku и т.д.)

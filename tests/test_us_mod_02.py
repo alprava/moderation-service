@@ -21,21 +21,26 @@ def test_next_returns_oldest_pending():
     older_id = str(uuid.uuid4())
     newer_id = str(uuid.uuid4())
     
+    ticket1_id = uuid.uuid4().hex
+    ticket2_id = uuid.uuid4().hex
+    
     ticket1 = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket1_id,
         product_id=older_id,
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.PENDING,
         created_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        product_data_after={}
+        product_data_after={},
+        queue_priority=4
     )
     ticket2 = Ticket(
-        id=uuid.uuid4().hex,
+        id=ticket2_id,
         product_id=newer_id,
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.PENDING,
         created_at=datetime.now(timezone.utc),
-        product_data_after={}
+        product_data_after={},
+        queue_priority=4
     )
     db.add_all([ticket1, ticket2])
     db.commit()
@@ -48,7 +53,14 @@ def test_next_returns_oldest_pending():
     )
     assert resp.status_code == 200
     data = resp.json()
+    
+    # Проверяем формат ответа по контракту
+    assert "id" in data
+    assert data["id"] == ticket1_id
     assert data["product_id"] == older_id
+    assert "kind" in data
+    assert data["status"] == TicketStatus.IN_REVIEW
+    assert "queue_priority" in data
     
     db = SessionLocal()
     ticket = db.query(Ticket).filter(Ticket.product_id == older_id).first()
@@ -70,7 +82,8 @@ def test_concurrent_two_moderators_get_different_cards():
             seller_id=str(uuid.uuid4()),
             status=TicketStatus.PENDING,
             created_at=datetime.now(timezone.utc),
-            product_data_after={}
+            product_data_after={},
+            queue_priority=4
         )
         db.add(ticket)
     db.commit()
@@ -104,7 +117,6 @@ def test_empty_queue_returns_204():
         headers={"X-Moderator-Key": moderator_id}
     )
     assert resp.status_code == 204
-    # Проверяем, что тело ответа пустое
     assert resp.text == ""
 
 
@@ -121,7 +133,8 @@ def test_moderator_already_has_in_review_returns_409():
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
         reviewed_by=moderator_id,
-        product_data_after={}
+        product_data_after={},
+        queue_priority=4
     )
     db.add(ticket)
     db.commit()
