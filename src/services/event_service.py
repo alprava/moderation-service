@@ -21,22 +21,14 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
     product_id = str(event.payload.product_id)
     seller_id = str(event.payload.seller_id)
     
-    # Определяем kind: CREATE для PRODUCT_CREATED, EDIT для PRODUCT_EDITED
     if event.event_type == B2BEventType.PRODUCT_CREATED:
         kind = "CREATE"
-    elif event.event_type == B2BEventType.PRODUCT_EDITED:
-        kind = "EDIT"
-    else:
-        kind = None
-    
-    if event.event_type == B2BEventType.PRODUCT_CREATED:
         ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if ticket:
             ticket.product_data_after = event.payload.json_after
             ticket.status = TicketStatus.PENDING
             ticket.updated_at = datetime.now(timezone.utc)
-            if kind:
-                ticket.kind = kind
+            ticket.kind = kind
         else:
             ticket = Ticket(
                 product_id=product_id,
@@ -51,6 +43,7 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
             db.add(ticket)
     
     elif event.event_type == B2BEventType.PRODUCT_EDITED:
+        kind = "EDIT"
         ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if not ticket:
             raise HTTPException(
@@ -62,8 +55,7 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
         ticket.product_data_before = ticket.product_data_after
         ticket.product_data_after = event.payload.json_after
         ticket.updated_at = datetime.now(timezone.utc)
-        if kind:
-            ticket.kind = kind
+        ticket.kind = kind
     
     elif event.event_type == B2BEventType.PRODUCT_DELETED:
         ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()

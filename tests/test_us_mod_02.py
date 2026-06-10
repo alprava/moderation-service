@@ -6,16 +6,12 @@ from src.main import app
 from src.database import SessionLocal, Base, engine
 from src.models.ticket import Ticket, TicketStatus
 
-# Создаём тестовую базу
 Base.metadata.create_all(bind=engine)
-
 client = TestClient(app)
 
 
 def test_next_returns_oldest_pending():
-    """Самая старая PENDING карточка переходит в IN_REVIEW"""
     db = SessionLocal()
-    # Очищаем таблицу
     db.query(Ticket).delete()
     
     older_id = str(uuid.uuid4())
@@ -31,7 +27,8 @@ def test_next_returns_oldest_pending():
         status=TicketStatus.PENDING,
         created_at=datetime.now(timezone.utc) - timedelta(hours=1),
         product_data_after={},
-        queue_priority=4
+        queue_priority=4,
+        kind="CREATE"
     )
     ticket2 = Ticket(
         id=ticket2_id,
@@ -40,7 +37,8 @@ def test_next_returns_oldest_pending():
         status=TicketStatus.PENDING,
         created_at=datetime.now(timezone.utc),
         product_data_after={},
-        queue_priority=4
+        queue_priority=4,
+        kind="CREATE"
     )
     db.add_all([ticket1, ticket2])
     db.commit()
@@ -54,11 +52,9 @@ def test_next_returns_oldest_pending():
     assert resp.status_code == 200
     data = resp.json()
     
-    # Проверяем формат ответа по контракту
-    assert "id" in data
     assert data["id"] == ticket1_id
     assert data["product_id"] == older_id
-    assert "kind" in data
+    assert data["kind"] in ("CREATE", "EDIT")
     assert data["status"] == TicketStatus.IN_REVIEW
     assert "queue_priority" in data
     
@@ -66,11 +62,11 @@ def test_next_returns_oldest_pending():
     ticket = db.query(Ticket).filter(Ticket.product_id == older_id).first()
     assert ticket.status == TicketStatus.IN_REVIEW
     assert ticket.reviewed_by == moderator_id
+    assert ticket.kind in ("CREATE", "EDIT")
     db.close()
 
 
 def test_concurrent_two_moderators_get_different_cards():
-    """Два модератора получают разные карточки"""
     db = SessionLocal()
     db.query(Ticket).delete()
     
@@ -83,7 +79,8 @@ def test_concurrent_two_moderators_get_different_cards():
             status=TicketStatus.PENDING,
             created_at=datetime.now(timezone.utc),
             product_data_after={},
-            queue_priority=4
+            queue_priority=4,
+            kind="CREATE"
         )
         db.add(ticket)
     db.commit()
@@ -100,12 +97,10 @@ def test_concurrent_two_moderators_get_different_cards():
     
     data1 = resp1.json()
     data2 = resp2.json()
-    
     assert data1["product_id"] != data2["product_id"]
 
 
 def test_empty_queue_returns_204():
-    """Пустая очередь возвращает 204"""
     db = SessionLocal()
     db.query(Ticket).delete()
     db.commit()
@@ -121,7 +116,6 @@ def test_empty_queue_returns_204():
 
 
 def test_moderator_already_has_in_review_returns_409():
-    """Модератор уже имеет IN_REVIEW карточку → 409"""
     db = SessionLocal()
     db.query(Ticket).delete()
     
@@ -134,7 +128,8 @@ def test_moderator_already_has_in_review_returns_409():
         status=TicketStatus.IN_REVIEW,
         reviewed_by=moderator_id,
         product_data_after={},
-        queue_priority=4
+        queue_priority=4,
+        kind="CREATE"
     )
     db.add(ticket)
     db.commit()

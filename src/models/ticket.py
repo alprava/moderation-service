@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Enum, JSON, Text, Integer
+from sqlalchemy import Column, String, DateTime, JSON, Text, Integer
 from src.database import Base
 
 
@@ -21,24 +21,21 @@ class Ticket(Base):
     
     status = Column(String(20), nullable=False, default=TicketStatus.PENDING)
     
-    # Данные товара (снапшоты)
-    product_data_before = Column(JSON, nullable=True)   # json_before
-    product_data_after = Column(JSON, nullable=True)    # json_after
+    product_data_before = Column(JSON, nullable=True)
+    product_data_after = Column(JSON, nullable=True)
     
-    # Результат модерации
     blocking_reason_id = Column(String(32), nullable=True)
     moderator_comment = Column(Text, nullable=True)
-    field_reports = Column(JSON, nullable=True)  # [{field_name, sku_id, comment}]
-    hard_block = Column(JSON, nullable=True)     # флаг жёсткой блокировки
+    field_reports = Column(JSON, nullable=True)
+    hard_block = Column(JSON, nullable=True)
     
-    # Метаданные
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(32), nullable=True)
     
-    # Поля для очереди
-    queue_priority = Column(Integer, default=4)  # 1 — высший, 4 — низший
+    queue_priority = Column(Integer, default=4)
     in_review_expires_at = Column(DateTime, nullable=True)
-
-    kind = Column(String(50), default="product")  # тип тикета (product, sku и т.д.)
+    
+    # kind — обязательно CREATE или EDIT, без default
+    kind = Column(String(10), nullable=False)
