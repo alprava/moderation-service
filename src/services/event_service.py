@@ -11,7 +11,6 @@ from src.schemas.events import B2BEventRequest, B2BEventType
 def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
     """Обработка событий от B2B (US-MOD-01)"""
     
-    # 1. Идемпотентность
     existing = db.query(ProcessedEvent).filter(
         ProcessedEvent.sender_service == "b2b",
         ProcessedEvent.idempotency_key == str(event.idempotency_key)
@@ -22,14 +21,22 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
     product_id = str(event.payload.product_id)
     seller_id = str(event.payload.seller_id)
     
+    # Определяем kind: CREATE для PRODUCT_CREATED, EDIT для PRODUCT_EDITED
     if event.event_type == B2BEventType.PRODUCT_CREATED:
-        # Создаём новый тикет (если уже существует — можно обновить)
+        kind = "CREATE"
+    elif event.event_type == B2BEventType.PRODUCT_EDITED:
+        kind = "EDIT"
+    else:
+        kind = None
+    
+    if event.event_type == B2BEventType.PRODUCT_CREATED:
         ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if ticket:
-            # Обновляем существующий
             ticket.product_data_after = event.payload.json_after
             ticket.status = TicketStatus.PENDING
             ticket.updated_at = datetime.now(timezone.utc)
+            if kind:
+                ticket.kind = kind
         else:
             ticket = Ticket(
                 product_id=product_id,
@@ -38,6 +45,8 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
                 product_data_after=event.payload.json_after,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
+                kind=kind,
+                queue_priority=4
             )
             db.add(ticket)
     
@@ -48,20 +57,19 @@ def process_b2b_event(db: Session, event: B2BEventRequest) -> None:
                 status_code=400,
                 detail={"code": "INVALID_REQUEST", "message": f"Ticket for product {product_id} not found"}
             )
-        # Если тикет был APPROVED или BLOCKED — возвращаем в PENDING (очередь)
         if ticket.status in (TicketStatus.APPROVED, TicketStatus.BLOCKED):
             ticket.status = TicketStatus.PENDING
-        # Обновляем данные
         ticket.product_data_before = ticket.product_data_after
         ticket.product_data_after = event.payload.json_after
         ticket.updated_at = datetime.now(timezone.utc)
+        if kind:
+            ticket.kind = kind
     
     elif event.event_type == B2BEventType.PRODUCT_DELETED:
         ticket = db.query(Ticket).filter(Ticket.product_id == product_id).first()
         if ticket:
             db.delete(ticket)
     
-    # 3. Записать идемпотентность
     db.add(ProcessedEvent(
         sender_service="b2b",
         idempotency_key=str(event.idempotency_key),

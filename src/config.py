@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Таймаут для IN_REVIEW (минуты)
     review_timeout_minutes: int = 30
     
+    # Флаг для тестов (отключает отправку в B2B)
+    test_mode: bool = False
+    
     model_config = {"env_file": ".env"}
 
 
