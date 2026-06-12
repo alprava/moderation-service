@@ -37,9 +37,9 @@ def verify_moderator_key(x_moderator_key: str = Header(...)) -> str:
 def send_event_to_b2b(product_id: str, hard_block: bool, 
                        blocking_reason_ids: List[str], comment: str, 
                        field_reports: List[dict], idempotency_key: str) -> None:
-    """Отправка события BLOCKED в B2B"""
+    """Отправка события BLOCKED в B2B (формат для B2B)"""
     if settings.test_mode:
-        return  # В тестах не отправляем
+        return
     
     event_data = {
         "idempotency_key": idempotency_key,
@@ -124,17 +124,25 @@ def soft_block_ticket(
     
     ticket.blocking_reason_id = reason_id
     ticket.moderator_comment = request.comment
+    
+    # Внутреннее хранение: используем field_path и message (по контракту moderation)
     ticket.field_reports = [
-        {"field_name": fr.field_path, "comment": fr.message, "sku_id": None} 
+        {"field_path": fr.field_path, "message": fr.message}
         for fr in request.field_reports
     ] if request.field_reports else []
+    
     ticket.updated_at = datetime.now(timezone.utc)
     ticket.reviewed_at = datetime.now(timezone.utc)
     
     db.commit()
     db.refresh(ticket)
     
-    b2b_field_reports = [{"field_name": fr.field_path, "comment": fr.message, "sku_id": None} for fr in request.field_reports] if request.field_reports else []
+    # Для отправки в B2B: конвертируем в формат {field_name, comment}
+    b2b_field_reports = [
+        {"field_name": fr.field_path, "comment": fr.message, "sku_id": None}
+        for fr in request.field_reports
+    ] if request.field_reports else []
+    
     idem_key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ticket.product_id}:BLOCKED:{ticket.id}"))
     
     send_event_to_b2b(

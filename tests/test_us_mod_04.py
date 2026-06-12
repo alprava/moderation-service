@@ -7,7 +7,6 @@ from src.models.ticket import Ticket, TicketStatus
 from src.models.blocking_reason import BlockingReason
 from src.config import settings
 
-# Включаем тестовый режим (отключаем отправку в B2B)
 settings.test_mode = True
 
 Base.metadata.create_all(bind=engine)
@@ -65,7 +64,8 @@ def test_soft_block_unknown_reason_returns_400():
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
         reviewed_by="moderator1",
-        product_data_after={}
+        product_data_after={},
+        kind="CREATE"
     )
     db.add(ticket)
     db.commit()
@@ -88,7 +88,8 @@ def test_soft_block_others_card_returns_403():
         seller_id=str(uuid.uuid4()),
         status=TicketStatus.IN_REVIEW,
         reviewed_by="other_moderator",
-        product_data_after={}
+        product_data_after={},
+        kind="CREATE"
     )
     db.add(ticket)
     db.commit()
@@ -130,7 +131,26 @@ def test_soft_block_hard_only_reason_returns_hard_blocked():
 
 
 def test_soft_block_emits_event_to_b2b():
-    """Тест проверяет, что функция отправки вызывается (но реальный запрос не делается)"""
-    # В test_mode отправка отключена, но структура вызова проверяется в тестах выше
-    # Этот тест можно пропустить, так как мы проверяем логику через test_mode
-    pass
+    """Тест проверяет, что при вызове эндпоинта нет ошибок"""
+    db = SessionLocal()
+    ticket_id = uuid.uuid4().hex
+    ticket = Ticket(
+        id=ticket_id,
+        product_id=str(uuid.uuid4()),
+        seller_id=str(uuid.uuid4()),
+        status=TicketStatus.IN_REVIEW,
+        reviewed_by="moderator1",
+        product_data_after={},
+        queue_priority=4,
+        kind="CREATE"
+    )
+    db.add(ticket)
+    db.commit()
+    db.close()
+    
+    resp = client.post(
+        f"/api/v1/tickets/{ticket_id}/block",
+        json={"blocking_reason_ids": ["1"]},
+        headers={"X-Moderator-Key": "moderator1"}
+    )
+    assert resp.status_code == 200
